@@ -1,0 +1,145 @@
+#include "Wire.h"
+#include "I2Cdev.h"
+#include "MPU6050.h"
+#include  <Servo.h>
+
+MPU6050 mpu;
+
+int i=0;
+
+float T=0;
+float Ta=0;
+float Tb=0;
+int16_t ax, ay, az;
+int16_t gx, gy, gz;
+
+float x=0;
+float cx=0;
+float bx=0;
+
+float y=0;
+float cy=0;
+float by=0;
+
+float z=0;
+float cz=0;
+float bz=0;
+
+float a=0;
+float b=0;
+float g=0;
+
+float xs=0; // initial inertial vector value
+float ys=0;
+float zs=100;
+
+int q=0;
+int w=0;
+int e=0;
+int r=0;
+
+
+int p=0;
+
+Servo Q;
+Servo W;
+Servo E;
+Servo R;
+Servo Y;
+
+void setup()
+{
+  Wire.begin();
+  Serial.begin(250000);
+
+  Q.attach(3);
+  W.attach(4);
+  E.attach(5);
+  R.attach(6);
+  Y.attach(7);
+  Y.write(150);
+  
+
+  Serial.println("Initialize MPU");
+  mpu.initialize();
+  Serial.println(mpu.testConnection() ? "Connected" : "Connection failed");
+    for(int i=0; i<1000; i++){
+    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz); //self calibration at boot
+    bx=bx+gx;
+    by=by+gy;
+    bz=bz+gz;
+  }
+  bx=bx/1000; // obtain zero offset
+  by=by/1000;
+  bz=bz/1000;
+  Ta=micros();
+  
+  
+}
+
+void loop(){
+  Ta=Tb;
+  Tb=micros();
+  T=Tb-Ta;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  a=(-1)*T*(gx-bx)/(131068000); //(raw data - offset)*time step/coefficient
+  b=(-1)*T*(gy-by)/(131068000); //gives us change in degrees from last cycle in degrees
+  g=(-1)*T*(gz-bz)/(131068000); // -1 is needed to 'flip' reference, as vector stays still while frame rotates
+
+  a=a/57.3; // change in radians
+  b=b/57.3;
+  g=g/57.3;
+
+  x=xs*(cos(b)*cos(g))-ys*(cos(b)*sin(g))+zs*(sin(b));
+  y=xs*(sin(a)*sin(b)*cos(g)+cos(a)*sin(g))+ys*(cos(a)*cos(g)-sin(a)*sin(b)*sin(g))-zs*(sin(a)*cos(b)); // 'new' vector is calculated by multiplying 'old' vector by rotation matrixes
+  z=xs*(sin(a)*sin(g)-cos(a)*sin(b)*cos(g))+ys*(cos(a)*sin(b)*sin(g)+sin(a)*cos(g))+zs*(cos(a)*cos(b));
+
+
+  xs=x; //'new' becomes 'old' for the next cycle 
+  ys=y;
+  zs=z;
+
+
+  i=i+1;
+  if(i>=20){
+  Serial.print(x); //vector and time step are printed every 20th cycle
+  Serial.print(" , ");
+  Serial.print(y);
+  Serial.print(" , ");
+  Serial.print(z);
+  Serial.print(" , ");
+  Serial.println(T);
+  i=0;
+  }
+  
+  if(p==0){ //if parachute even is 0 (prior to flip)
+  q=-y+a*3000-g*600; // apply these PD (no I in this PID) variables to canard servos for control
+  w=x+b*3000-g*600; // 'x/y' is P in pitch/yaw, 'a/b' are D, while 'g' is D to counter roll
+  e=y-a*3000-g*600;
+  r=-x-b*3000-g*600;
+  }
+  else{ // if parachute is deployed, set canard angles to zero
+  q=0;
+  w=0;
+  e=0;
+  r=0;
+  }
+
+  if(q>40){q=40;} // limit servo/control surface deflections to 40 degrees
+  if(q<-40){q=-40;}
+  if(w>40){w=40;}
+  if(w<-40){w=-40;}
+  if(e>40){e=40;}
+  if(e<-40){e=-40;}
+  if(r>40){r=40;}
+  if(r<-40){r=-40;}
+
+  Q.write(95+q); // write to servo with known offsets
+  W.write(104+w);
+  E.write(102+e);
+  R.write(94+r);
+  if(z<50){Y.write(25); p=1;} // initial inertial vector is (0; 0; 100), thus if z is less than 50, it means that the rocket has reached the apex and started falling, pitching down
+                              // which activates parachute release servo and changes 'p' state to 1
+
+}
+
